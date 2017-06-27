@@ -27,6 +27,7 @@
 
 #include <string.h>
 #include <syslog.h>
+#include <arpa/inet.h>
 #include "common.h"
 #include "hs_digest.h"
 #include "stb_3des.h"
@@ -41,7 +42,7 @@
 struct option60_method {
 		char* operator;
 		char* location;
-		int(*algorithms)(void*);
+		int(*algorithms)(void*, char* outbuf);
 };
 
 /* common
@@ -52,12 +53,11 @@ struct option60_method {
  * context = 3des_enrypt(R + user + TS)
  * option60 = O + R + TS + KEY + context
  */
-static int generate_option60_common(void* arg)
+static int generate_option60_common(void* arg, char* outbuf)
 {
 	struct option60_input* opi = (struct option60_input*)arg;
 	const char *user = opi->str1;
 	const char *passwd = opi->str2;
-	char * outbuf = opi->outbuf;
 
 	int i;
 	//use O=1 to describe this algorithms.
@@ -138,12 +138,11 @@ static int generate_option60_common(void* arg)
  * KEY = md5(R + passwd + TS)
  * option60 = O + R + TS + KEY + user
  */
-static int generate_option60_telecom_zhejiang(void * arg)
+static int generate_option60_telecom_zhejiang(void * arg, char* outbuf)
 {
 	struct option60_input * opi = (struct option60_input*)arg;
 	const char *user = opi->str1;
 	const char *passwd = opi->str2;
-	char * outbuf = opi->outbuf;
 
 	int i;
 	unsigned char timestamp[9] = {0};
@@ -211,31 +210,45 @@ static int generate_option60_telecom_zhejiang(void * arg)
 	return outbuf_len;
 }
 
+static int buf2hexstr(char* inbuf, char* outbuf, int len)
+{
+	//translate inbuf[len] to hexdecimal string[2*len]
+	char * CODE = "0123456789ABCDEF";
+	int i =0;
+	for ( i = 0; i< len; i++) {
+		outbuf[i*2] = CODE[inbuf[i]/16];
+		outbuf[(i*2)+1] = CODE[inbuf[i]%16];
+	}
+	outbuf[i*2] = '\0';
+    return i;
+}
+
 /* liaoning unicom
  * key = "LUIOITDCNNCMPVHP"
  * option60 = sha-1(xid + key)
  */
-int generate_option60_unicom_liaoning(void* arg)
+static int generate_option60_unicom_liaoning(void* arg, char* outbuf)
 {
 	struct option60_input * opi = (struct option60_input*)arg;
-	const long xid = opi->long1;
+	const long *xid = opi->longp;
 	const char *key = "LUIOITDCNNCMPVHP";
-	char * outbuf = opi->outbuf;
 	unsigned char sha1text[129] = {0};
 	char xidtext[11]={0};
 	unsigned int sha1len = 0;
 	int handle;
 
+	//translate xid to network byte order (big endian).
+	long xid_net = htonl(*xid);
 	syslog(LOG_DEBUG, "generate option60 method: %s", __FUNCTION__);
-	syslog(LOG_INFO, "xid:%lu(%lx), KEY:%s",xid, xid, key);
-	if(0 == xid)
+	syslog(LOG_DEBUG, "xid:%lu(0x%lx); xid_net:%lu(0x%lx)",*xid, *xid, xid_net, xid_net);
+	if(0 == *xid)
 	{
 		syslog(LOG_ERR, "error xid ");
 		return -1;
 	}
-	snprintf(xidtext, sizeof(xidtext), "%lu",xid);
+	snprintf(xidtext, sizeof(xidtext), "%lu",xid_net);
 
-	//option60 = hash(xid + key)
+	//option60 = sha-1(xid + key)
 	memset(sha1text,0,sizeof(sha1text));
 	memcpy(sha1text,xidtext,strlen(xidtext));
 	sha1len = strlen(xidtext);
@@ -244,10 +257,15 @@ int generate_option60_unicom_liaoning(void* arg)
 
 	handle = STB_digest_init(STB_DIGEST_SHA1);
 	STB_digest_update(handle,sha1text,sha1len);
-	STB_digest_final(handle, (unsigned char*)outbuf, 21);
+	STB_digest_final(handle, outbuf, 20);
 
-	syslog(LOG_INFO, "sha-1 outbuf is: %s\n",outbuf);
-	return 21;
+#ifdef OPT60_DBG
+	char hexstr[41]={0};
+	buf2hexstr(outbuf, hexstr,20);
+	syslog(LOG_DEBUG, "Value : %s", hexstr);
+#endif
+
+	return 20;
 }
 
 /* If you wanna add your manufacture supported ,please fill the table in format:
@@ -289,10 +307,10 @@ static struct option60_method* get_option60_method(const char* operator, const c
  * @param: arg: arguments is carried with struct option60_input, according to different
  * 		   operator-locations,it carried different args, but mostly is username and
  * 		   passowrd.
- * @param: arg->outbuf:	the output buffer of generated option 60.
+ * @param: outbuf:	the output buffer of generated option 60.
  * @return: length of option 60.
  */
-int generate_option60(struct option60_input* arg)
+int generate_option60(struct option60_input* arg, char* outbuf)
 {
 	struct option60_method* mmethod;
 	char operator[PROPERTY_VALUE_MAX] = {0};
@@ -302,5 +320,5 @@ int generate_option60(struct option60_input* arg)
 	syslog(LOG_INFO, "Operator-Location: %s-%s\n",operator, location);
 
 	mmethod = get_option60_method(operator,location);
-	return mmethod->algorithms((void*)arg);
+	return mmethod->algorithms((void*)arg, outbuf);
 }
