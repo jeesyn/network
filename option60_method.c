@@ -230,10 +230,11 @@ static int buf2hexstr(char* inbuf, char* outbuf, int len)
 static int generate_option60_unicom_liaoning(void* arg, char* outbuf)
 {
 	struct option60_input * opi = (struct option60_input*)arg;
-	const long *xid = opi->longp;
+	long *xid = opi->longp;
 	const char *key = "LUIOITDCNNCMPVHP";
 	unsigned char sha1text[129] = {0};
 	char xidtext[11]={0};
+	char sha1buf[20];
 	unsigned int sha1len = 0;
 	int handle;
 
